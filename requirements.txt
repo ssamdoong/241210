@@ -1,7 +1,7 @@
 streamlit>=1.30.0
 openai>=1.0.0
 langchain>=0.1.0
-unstructured>=0.10.0
+unstructured[pdf,docx,md]>=0.10.0
 wikipedia
 tiktoken
 dataclasses-json>=0.6.1
