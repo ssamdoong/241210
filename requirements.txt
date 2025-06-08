@@ -94,7 +94,6 @@ langcodes==3.3.0
 langsmith==0.0.52
 layoutparser==0.3.4
 loguru==0.7.2
-lxml==4.9.3
 manifest-ml==0.0.1
 Markdown==3.4.4
 markdown-it-py==3.0.0
@@ -113,7 +112,7 @@ nest-asyncio==1.5.8
 networkx==3.1
 nltk==3.8.1
 numexpr==2.8.5
-numpy==1.25.2
+numpy==1.26.4
 olefile==0.46
 omegaconf==2.3.0
 onnx==1.14.1
