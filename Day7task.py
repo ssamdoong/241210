@@ -12,64 +12,153 @@ from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import FAISS
 from langchain.chains import RetrievalQA
 from langchain.document_loaders.sitemap import SitemapLoader
-from langchain.text_splitter import CharacterTextSplitter
 
-s# 각 프로덕트 공식문서 메인 URL (설명, 용도 표시)
-AI_GATEWAY_URL = "https://developers.cloudflare.com/ai-gateway/"
-VECTORIZER_URL = "https://developers.cloudflare.com/vectorize/"
-WORKERS_AI_URL = "https://developers.cloudflare.com/workers-ai/"
-SITEMAP_URL = "https://developers.cloudflare.com/sitemap-0.xml"
+from langchain.document_loaders import SitemapLoader
+from langchain.schema.runnable import RunnableLambda, RunnablePassthrough
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.vectorstores.faiss import FAISS
+
+
+
+
+
+# ----- 프롬프트/체인 구성부 -----
+answers_prompt = ChatPromptTemplate.from_template(
+    """
+    Using ONLY the following context answer the user's question. If you can't just say you don't know, don't make anything up.
+    Then, give a score to the answer between 0 and 5.
+    If the answer answers the user question the score should be high, else it should be low.
+    Make sure to always include the answer's score even if it's 0.
+    Context: {context}
+    Examples:
+    Question: How far away is the moon?
+    Answer: The moon is 384,400 km away.
+    Score: 5
+
+    Question: How far away is the sun?
+    Answer: I don't know
+    Score: 0
+
+    Your turn!
+    Question: {question}
+"""
+)
+
+def get_answers(inputs):
+    docs = inputs["docs"]
+    question = inputs["question"]
+    answers_chain = answers_prompt | ChatOpenAI(temperature=0.1, openai_api_key=st.session_state["openai_api_key"])
+    return {
+        "question": question,
+        "answers": [
+            {
+                "answer": answers_chain.invoke({"question": question, "context": doc.page_content}).content,
+                "source": doc.metadata["source"],
+                "date": doc.metadata.get("lastmod", ""),
+            }
+            for doc in docs
+        ],
+    }
+
+choose_prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """
+            Use ONLY the following pre-existing answers to answer the user's question.
+            Use the answers that have the highest score (more helpful) and favor the most recent ones.
+            Cite sources and return the sources of the answers as they are, do not change them.
+            Answers: {answers}
+            """,
+        ),
+        ("human", "{question}"),
+    ]
+)
+
+def choose_answer(inputs):
+    answers = inputs["answers"]
+    question = inputs["question"]
+    choose_chain = choose_prompt | ChatOpenAI(temperature=0.1, openai_api_key=st.session_state["openai_api_key"])
+    condensed = "\n\n".join(
+        f"{answer['answer']}\nSource:{answer['source']}\nDate:{answer['date']}\n"
+        for answer in answers
+    )
+    return choose_chain.invoke(
+        {
+            "question": question,
+            "answers": condensed,
+        }
+    )
+
+def parse_page(soup):
+    header = soup.find("header")
+    footer = soup.find("footer")
+    if header:
+        header.decompose()
+    if footer:
+        footer.decompose()
+    return (
+        str(soup.get_text())
+        .replace("\n", " ")
+        .replace("\xa0", " ")
+        .replace("CloseSearch Submit Blog", "")
+    )
+
+@st.cache_data(show_spinner="Cloudflare 공식문서 임베딩 중...")
+def load_cf_docs(api_key):
+    splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+        chunk_size=1000,
+        chunk_overlap=200,
+    )
+    loader = SitemapLoader(
+        "https://developers.cloudflare.com/sitemap-0.xml",
+        parsing_function=parse_page,
+    )
+    loader.requests_per_second = 2
+    docs = loader.load_and_split(text_splitter=splitter)
+    vector_store = FAISS.from_documents(docs, OpenAIEmbeddings(openai_api_key=api_key))
+    return vector_store.as_retriever()
+
+st.set_page_config(
+    page_title="Cloudflare SiteGPT",
+    page_icon="☁️",
+)
+
+st.markdown(
+    """
+    # ☁️ Cloudflare Docs SiteGPT
+    Ask anything about Cloudflare's [AI Gateway](https://developers.cloudflare.com/ai-gateway/), 
+    [Vectorize](https://developers.cloudflare.com/vectorize/), and [Workers AI](https://developers.cloudflare.com/workers-ai/) docs.
+    \n
+    _Start by entering your OpenAI API Key in the sidebar._  
+    _Docs are loaded from [Cloudflare 공식 Sitemap](https://developers.cloudflare.com/sitemap-0.xml)_
+"""
+)
 
 with st.sidebar:
-    st.title("☁️ SiteGPT - Cloudflare Docs Chatbot")
-    openai_api_key = st.text_input("Enter your OpenAI API Key:", type="password")
+    st.markdown("## 1. Enter your OpenAI API Key")
+    openai_api_key = st.text_input("OpenAI API Key", type="password", key="openai_api_key")
+    st.markdown("## 2. See the source code:")
     st.markdown("[🔗 GitHub Repo](https://github.com/yourusername/sideGPT-cloudflare)")
+    st.markdown("---")
+    st.markdown("### Cloudflare Docs Quick Links")
+    st.markdown("- [AI Gateway](https://developers.cloudflare.com/ai-gateway/)")
+    st.markdown("- [Vectorize](https://developers.cloudflare.com/vectorize/)")
+    st.markdown("- [Workers AI](https://developers.cloudflare.com/workers-ai/)")
 
-    # 공식문서 빠른 링크
-    st.markdown("**Docs Quick Links**")
-    st.markdown(f"- [AI Gateway]({AI_GATEWAY_URL})")
-    st.markdown(f"- [Vectorize]({VECTORIZER_URL})")
-    st.markdown(f"- [Workers AI]({WORKERS_AI_URL})")
-
-st.title("💬 Cloudflare Docs Chatbot")
-st.caption("AI Gateway / Vectorize / Workers AI 공식 문서 기반 Q&A")
-
-if not openai_api_key:
-    st.warning("Please enter your OpenAI API Key to continue.")
-    st.stop()
-
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-@st.cache_resource(show_spinner="문서 임베딩 및 인덱싱 중...")
-def get_retriever(api_key):
-    # 하나의 사이트맵에서 전체 문서 수집
-    loader = SitemapLoader(web_path=SITEMAP_URL)
-    all_docs = loader.load()
-    # 필요시 아래처럼 제품별로 필터링 가능 (참고용, 지금은 전체 문서 사용)
-    # all_docs = [doc for doc in all_docs if any(
-    #     x in doc.metadata['source'] for x in [AI_GATEWAY_URL, VECTORIZER_URL, WORKERS_AI_URL]
-    # )]
-    splitter = CharacterTextSplitter.from_tiktoken_encoder(chunk_size=700, chunk_overlap=100)
-    split_docs = splitter.split_documents(all_docs)
-    embeddings = OpenAIEmbeddings(openai_api_key=api_key)
-    vectordb = FAISS.from_documents(split_docs, embeddings)
-    return vectordb.as_retriever()
-
-retriever = get_retriever(openai_api_key)
-llm = ChatOpenAI(model="gpt-4", temperature=0, openai_api_key=openai_api_key)
-qa_chain = RetrievalQA.from_chain_type(llm=llm, retriever=retriever)
-
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-
-if prompt := st.chat_input("Cloudflare 공식문서에 대해 궁금한 점을 물어보세요!"):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-    with st.chat_message("assistant"):
-        with st.spinner("Cloudflare 공식문서를 검색 중..."):
-            answer = qa_chain.run(prompt)
-            st.markdown(answer)
-            st.session_state.messages.append({"role": "assistant", "content": answer})
+if openai_api_key:
+    retriever = load_cf_docs(openai_api_key)
+    query = st.text_input("Ask a question about Cloudflare Docs.")
+    if query:
+        chain = (
+            {
+                "docs": retriever,
+                "question": RunnablePassthrough(),
+            }
+            | RunnableLambda(get_answers)
+            | RunnableLambda(choose_answer)
+        )
+        result = chain.invoke(query)
+        st.markdown(result.content.replace("$", "\$"))
+else:
+    st.info("Please enter your OpenAI API Key in the sidebar to start.")
