@@ -1,6 +1,8 @@
 import streamlit as st
 import openai
 import os
+import time
+import json
 
 # ===== Streamlit UI =====
 st.set_page_config(page_title="Research Assistant", page_icon="🔎")
@@ -138,15 +140,50 @@ if user_input:
             assistant_id=st.session_state["assistant_id"]
         )
 
-        # Wait until run completes
-        import time
+        # Main loop: polling until run is finished, handling tool/function calls
         while True:
             run_status = openai_client.beta.threads.runs.retrieve(
                 thread_id=st.session_state["thread_id"], run_id=run.id
             )
-            if run_status.status in ["completed", "failed", "cancelled"]:
+
+            if run_status.status == "completed":
                 break
-            time.sleep(2)
+            elif run_status.status == "failed":
+                st.error("Run failed.")
+                break
+            elif run_status.status == "cancelled":
+                st.error("Run cancelled.")
+                break
+            elif run_status.status == "requires_action":
+                # ===== Function Calling Handling =====
+                tool_calls = run_status.required_action.submit_tool_outputs.tool_calls
+                tool_outputs = []
+                for tool_call in tool_calls:
+                    function_name = tool_call.function.name
+                    args = json.loads(tool_call.function.arguments)
+                    # 실제 파이썬 함수 실행
+                    try:
+                        if function_name == "wikipedia_search":
+                            output = wikipedia_search(**args)
+                        elif function_name == "duckduckgo_search":
+                            output = duckduckgo_search(**args)
+                        elif function_name == "web_scraper":
+                            output = web_scraper(**args)
+                        elif function_name == "save_to_txt":
+                            output = save_to_txt(**args)
+                        else:
+                            output = f"Unknown function: {function_name}"
+                    except Exception as e:
+                        output = f"Tool {function_name} execution failed: {str(e)}"
+                    tool_outputs.append({"tool_call_id": tool_call.id, "output": output})
+                # Assistant API에 tool_outputs로 전송
+                openai_client.beta.threads.runs.submit_tool_outputs(
+                    thread_id=st.session_state["thread_id"],
+                    run_id=run.id,
+                    tool_outputs=tool_outputs,
+                )
+            else:
+                time.sleep(2)
 
         # Get all messages in thread
         messages = openai_client.beta.threads.messages.list(thread_id=st.session_state["thread_id"])
