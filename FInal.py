@@ -10,7 +10,7 @@ st.set_page_config(page_title="Research Assistant", page_icon="🔎")
 with st.sidebar:
     openai_api_key = st.text_input("Enter your OpenAI API Key", type="password")
     st.markdown("---")
-    st.markdown("[GitHub Repo](https://github.com/yourusername/your-repo-url)")
+    st.markdown("[HELLO!](https://github.com/)")
 
 st.title("🔎 Research Assistant")
 st.write("Ask any research question! Tools: Wikipedia, DuckDuckGo, Web Scraper, Save-to-TXT.")
